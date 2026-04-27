@@ -1,0 +1,198 @@
+# ==============================================================================
+# Middleware Fiscal NF-e — Docker Compose (Produção / Dokploy)
+# ==============================================================================
+#
+# VARIÁVEIS DE AMBIENTE — configure todas no painel do Dokploy.
+# Os valores com ${VAR} são substituídos pelas vars configuradas no Dokploy.
+# Os valores fixos (DB_HOST, REDIS_HOST, etc.) apontam para os serviços internos.
+#
+# PRÉ-REQUISITO (Apenas se for usar em produção via Dokploy/Traefik com rede externa):
+#   Descomente a rede 'vps-internal' no final deste arquivo e adicione-a nos services.
+#   docker network create vps-internal
+#
+# ODOO_URL: aponte para o domínio traefik.me do Odoo (ex: http://odoo-...traefik.me)
+# ==============================================================================
+
+services:
+
+  # ----------------------------------------------------------------------------
+  # App — Laravel Octane/Swoole (API principal)
+  # ----------------------------------------------------------------------------
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: middleware-app
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - storage_data:/var/www/storage
+    ports:
+      - "8000:8000"
+    command: php artisan octane:start --server=swoole --host=0.0.0.0 --port=8000 --workers=4
+    environment:
+      # --- App ---
+      APP_NAME: ${APP_NAME:-MiddlewareFiscal}
+      APP_ENV: ${APP_ENV:-production}
+      APP_KEY: ${APP_KEY}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_URL: ${APP_URL}
+      # --- Log ---
+      LOG_CHANNEL: ${LOG_CHANNEL:-stderr}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_DEPRECATIONS_CHANNEL: null
+      # --- Banco de dados (aponta para o serviço interno 'mariadb') ---
+      DB_CONNECTION: mysql
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      # --- Redis (aponta para o serviço interno 'redis') ---
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: "null"
+      # --- Drivers Laravel ---
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: redis
+      SESSION_LIFETIME: 120
+      BROADCAST_CONNECTION: log
+      FILESYSTEM_DISK: local
+      # --- Octane/Swoole ---
+      OCTANE_SERVER: swoole
+      OCTANE_HTTPS: "false"
+      # --- Integração Odoo ---
+      ODOO_URL: ${ODOO_URL}
+      ODOO_TOKEN: ${ODOO_TOKEN}
+      ODOO_WEBHOOK_SECRET: ${ODOO_WEBHOOK_SECRET}
+      # --- Focus NFCe ---
+      FOCUS_ENV: ${FOCUS_ENV}
+      FOCUS_URL: ${FOCUS_URL}
+      FOCUS_TOKEN: ${FOCUS_TOKEN}
+      # --- Fiscal (SEFAZ) ---
+      FISCAL_UF: ${FISCAL_UF}
+      FISCAL_CNPJ_EMITENTE: ${FISCAL_CNPJ_EMITENTE}
+      FISCAL_TIMEZONE: ${FISCAL_TIMEZONE}
+      FISCAL_SERIE_CONTINGENCIA: ${FISCAL_SERIE_CONTINGENCIA}
+      FISCAL_QRCODE_URL_PRODUCAO: ${FISCAL_QRCODE_URL_PRODUCAO}
+      FISCAL_QRCODE_URL_HOMOLOGACAO: ${FISCAL_QRCODE_URL_HOMOLOGACAO}
+      FISCAL_URL_CONSULTA: ${FISCAL_URL_CONSULTA}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - middleware-net
+      - vps-internal
+
+  # ----------------------------------------------------------------------------
+  # Queue — Processador de filas Redis
+  # ----------------------------------------------------------------------------
+  queue:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: middleware-queue
+    restart: unless-stopped
+    working_dir: /var/www
+    volumes:
+      - storage_data:/var/www/storage
+    command: php artisan queue:work redis --queue=contingencia,default --tries=3 --timeout=90 --max-jobs=1000 --sleep=1
+
+
+    environment:
+      APP_NAME: ${APP_NAME:-MiddlewareFiscal}
+      APP_ENV: ${APP_ENV:-production}
+      APP_KEY: ${APP_KEY}
+      APP_DEBUG: ${APP_DEBUG:-false}
+      APP_URL: ${APP_URL}
+      LOG_CHANNEL: ${LOG_CHANNEL:-stderr}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      DB_CONNECTION: mysql
+      DB_HOST: mariadb
+      DB_PORT: 3306
+      DB_DATABASE: ${DB_DATABASE}
+      DB_USERNAME: ${DB_USERNAME}
+      DB_PASSWORD: ${DB_PASSWORD}
+      REDIS_CLIENT: phpredis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: "null"
+      CACHE_STORE: redis
+      QUEUE_CONNECTION: redis
+      SESSION_DRIVER: redis
+      SESSION_LIFETIME: 120
+      OCTANE_SERVER: swoole
+      ODOO_URL: ${ODOO_URL}
+      ODOO_TOKEN: ${ODOO_TOKEN}
+      ODOO_WEBHOOK_SECRET: ${ODOO_WEBHOOK_SECRET}
+      FOCUS_ENV: ${FOCUS_ENV}
+      FOCUS_URL: ${FOCUS_URL}
+      FOCUS_TOKEN: ${FOCUS_TOKEN}
+      FISCAL_UF: ${FISCAL_UF}
+      FISCAL_CNPJ_EMITENTE: ${FISCAL_CNPJ_EMITENTE}
+      FISCAL_TIMEZONE: ${FISCAL_TIMEZONE}
+      FISCAL_SERIE_CONTINGENCIA: ${FISCAL_SERIE_CONTINGENCIA}
+      FISCAL_QRCODE_URL_PRODUCAO: ${FISCAL_QRCODE_URL_PRODUCAO}
+      FISCAL_QRCODE_URL_HOMOLOGACAO: ${FISCAL_QRCODE_URL_HOMOLOGACAO}
+      FISCAL_URL_CONSULTA: ${FISCAL_URL_CONSULTA}
+    depends_on:
+      mariadb:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - middleware-net
+      - vps-internal
+
+  # ----------------------------------------------------------------------------
+  # MariaDB — Banco de dados (NÃO exposto externamente)
+  # ----------------------------------------------------------------------------
+  mariadb:
+    image: mariadb:10.11
+    container_name: middleware-mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_USER: ${DB_USERNAME}
+    volumes:
+      - mariadb_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    networks:
+      - middleware-net
+
+  # ----------------------------------------------------------------------------
+  # Redis — Cache e filas (NÃO exposto externamente)
+  # ----------------------------------------------------------------------------
+  redis:
+    image: redis:alpine
+    container_name: middleware-redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - middleware-net
+
+networks:
+  middleware-net:
+    driver: bridge
+  vps-internal:
+    external: true
+    name: vps-internal
+
+volumes:
+  mariadb_data:
+  storage_data:
