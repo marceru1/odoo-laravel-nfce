@@ -1,42 +1,40 @@
-# Odoo Laravel NFC-e Middleware 🚀
+# Odoo 18 NFC-e Middleware
 
-Este é um projeto construído em **Laravel 11** que atua como um "Middleware" (uma ponte de comunicação) entre o ERP **Odoo** (Ponto de Venda) e a **Focus NFe** (API de emissão fiscal).
+Middleware construído em Laravel 11 para integrar as vendas de PDV do ERP Odoo com a API da Focus NFe. 
 
-## 💡 Por que este projeto existe?
-Sistemas gringos como o Odoo são excelentes para gerenciar a loja, mas muitas vezes não possuem a integração nativa com as regras fiscais de todos os estados do Brasil (como a emissão de NFC-e para o estado do Amazonas). 
+O Odoo não possui integração fiscal nativa completa para o Brasil (especialmente NFC-e). Alterar o core em Python geraria muito acoplamento. A solução foi extrair a responsabilidade fiscal para um serviço externo e independente. O Odoo apenas informa a venda via Webhook, e o Laravel assume as regras de negócio fiscais.
 
-Ao invés de tentar alterar o código fonte do Odoo (o que daria muita dor de cabeça em futuras atualizações), eu decidi criar essa API em Laravel para agir de forma independente. O Odoo apenas "avisa" o Laravel que uma venda foi feita, e o Laravel cuida de toda a burocracia fiscal pesada.
+## Arquitetura e Fluxo
 
-## ⚙️ Como funciona? (O Fluxo)
-1. **Webhook:** O Caixa finaliza a venda no Odoo POS e manda um JSON via Webhook pra cá.
-2. **Tratamento:** O Laravel recebe os dados, faz as validações e converte para o formato que a SEFAZ e a Focus exigem (lidando com CFOP, NCM, etc).
-3. **Filas (Queues):** Para o caixa não ficar "travado" esperando a nota ser emitida, usamos filas com Redis. O disparo para a Focus acontece em background.
-4. **Contingência Offline:** Se o sistema da Sefaz cair, o sistema tem regras locais para gerar a chave de acesso e salvar o payload para reenvio automático depois.
-5. **Retorno (Callback):** Assim que a Focus aprova, devolvemos a Chave de Acesso e o QR Code em Base64 de volta pro Odoo imprimir no cupom térmico do cliente.
+1. **Webhook PDV:** O caixa do Odoo finaliza a venda e dispara o payload.
+2. **Adapter Layer:** O Laravel recebe, sanitiza e adapta os dados (CFOP, NCM, regras de contingência, CNPJ dinâmico por filial) para o padrão da SEFAZ/Focus.
+3. **Filas (Queues):** Para evitar timeout e travamentos no caixa do operador, o disparo fiscal é enfileirado no Redis e processado em background de forma assíncrona.
+4. **Contingência Offline:** Se a SEFAZ ou a internet caírem, o PDV gera a chave local (Tipo B). O middleware absorve esses dados do webhook para garantir que a nota sincronizada posteriormente tenha exatamente a mesma chave de acesso impressa no papel.
+5. **Callback:** Após a autorização, o sistema envia o retorno (Chave + QR Code) de volta ao Odoo para exibição no histórico ou reimpressão.
 
-## 🛠️ Tecnologias Utilizadas
-* **PHP 8.2 / Laravel 11:** Framework principal pela velocidade de desenvolvimento e estrutura limpa.
-* **Redis:** Para processamento assíncrono de notas (Queues/Jobs).
-* **MariaDB:** Para manter um histórico de "backup" das notas enviadas.
-* **Docker / Docker Compose:** Para garantir que o projeto rode em qualquer lugar exatamente do mesmo jeito, facilitando o deploy.
+## Tech Stack
 
-## 🚀 Como rodar o projeto
-Para subir o ambiente completo localmente, basta usar o Docker:
+- **PHP 8.2 / Laravel 11**
+- **Laravel Octane (Swoole):** Necessário para lidar com picos de webhooks de múltiplos caixas simultâneos sem gargalo no FPM.
+- **Redis:** Gerenciamento de Filas e Cache de sessão.
+- **MariaDB:** Persistência do histórico fiscal.
+- **Docker Compose:** Infraestrutura fully-containerized pronta para deploy.
+
+## Setup Local
 
 ```bash
-# 1. Clone o repositório
-git clone https://github.com/SEU-USER/odoo-laravel-nfce.git
-
-# 2. Copie o arquivo de variáveis de ambiente
+git clone https://github.com/marceru1/odoo-laravel-nfce.git
+cd odoo-laravel-nfce
 cp .env.example .env
 
-# 3. Suba os containers do Docker
+# Sobe banco de dados e redis
 docker-compose up -d
 
-# 4. Instale as dependências
+# Instala dependências do framework
 docker-compose exec app composer install
 docker-compose exec app php artisan key:generate
 ```
 
-## 📝 O que eu aprendi
-Durante a criação deste projeto, tive que lidar com desafios interessantes de comunicação assíncrona (webhooks e polling), manipulação de strings em payloads complexos (como preenchimentos matemáticos e regras do dígito verificador fiscal), e orquestração de containers com redes independentes no Docker.
+## Deploy (Produção)
+
+O projeto foi desenhado para rodar via Dokploy/Coolify. O arquivo `docker-compose.yml` já separa o serviço de API (`app`) do serviço de processamento de filas em background (`queue`), rodando sob a mesma rede Docker. As variáveis sensíveis como tokens e endpoints devem ser injetadas diretamente no painel do servidor.
